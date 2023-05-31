@@ -1,0 +1,290 @@
+/*
+	This code allows an elevator to acclerate at the 
+	beginning of its movement, and decelerate at the end.
+	
+	Written by Sarah Blackburn
+	
+	This code is provided as-is with no guarantees of any kind.
+	You use this code in your own projects at your own risk.
+	
+	Please contact the author with any questions on the ZDoom Forum.
+	
+	You are free to do with this code as you see fit,
+	but I do request credit in your project if you use my code.
+	
+	Thanks!
+	
+	Version 0.3.2
+
+*/
+
+#LIBRARY "ELEACCEL"
+#include "zcommon.acs"
+
+// - Elevator Acceleration Controlled Movement Functions
+// - ---------------------------------------------------
+// - This set of scripts and functions allows elevators to accelerate and decelerate
+// - smoothly during their movement loop.
+// -
+// - Use the "MoveElevator" function from a script to move a given elevator.
+
+/*
+	This defines how far the elvator moves each loop.
+
+*/
+#define ELE_MOVEINCREMENT 8
+
+/*
+	This system is multiplayer friendly! Up to 8 players are supported;
+	and could be expanded through simple tweaks (like if it was used for Zandronum).
+	The array below stores the relevant data that can't be passed by script:
+		- does the elevator need to skip accelerating?
+		- what about skipping deceleration?
+		- what is the control sector id?
+		- does it have an acceleration bias?
+		- what about a deceleration bias?
+		- what kind of elevator is it?
+		- how far does the elevator need to travel
+		- what is it's maximum speed?
+		- how many map units should it spend accelerating, keeping in mind it will also use that many map units to decelerate?
+
+*/
+int map_arPlayerElevatorData[8][10];
+
+#define ELE_SKIP_ACCEL		0
+#define ELE_SKIP_DECEL		1
+#define ELE_ID				2
+#define ELE_ACCEL_BIAS		3
+#define ELE_DECEL_BIAS		4
+#define ELE_TYPE			5
+#define ELE_TOTALDIST		6
+#define ELE_MAXSPEED		7
+#define ELE_ACCELDIST		8
+#define ELE_CURSPEED		9
+
+/*
+	This function is called from implementation scripts to move an elevator.
+	It is assumed that it is a player that is the script activator.
+	
+	Args:
+	ElevatorId, int, this is the sector id of the elevator control sector(s).
+	SkipAccel, bool, if true the elevator will begin moving at full speed but can still decelerate.
+	SkipDecel, bool, if true the elevator will move to its final position at full speed.
+	TotalDist, int, how far the elevator will move; positive values move up, negative move down.
+	MaxSpeed, int, the maximum speed the elevator will move at.
+	AccelDist, int, how much of the Total Distance will be used for accelerating AND decelerating; this value is effectively doubled.
+	MoveStartBias, int, this value increases or decreases the rate of acceleration for the first half of acceleration; positive increase, negative decrease.
+	MoveEndBias, int, this value increases or decreases the rate of deceleration for the last half of deceleration; positive increase, negative decrease.
+	JustFloor, bool, if true only the floor of the given sector will be moved; this is for regular lifts and not 3D floor elevators!
+	ObjectTID, int, if not non-zero, a supplementary system will interpret this as the universal TID of any objects that should be moved with the elevator,
+		following the same rules.  This system is supplementary because moving objects is fundamentally different than sectors.
+*/
+function void MoveElevator (int ElevatorId, bool SkipAccel, bool SkipDecel, int TotalDist, int MaxSpeed, int AccelDist, int MoveStartBias, int MoveEndBias, bool JustFloor)
+{
+	if (PlayerNumber() != -1)
+	{
+		map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_ACCEL] = SkipAccel;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_DECEL] = SkipDecel;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ID] = ElevatorID;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ACCEL_BIAS] = MoveStartBias;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_DECEL_BIAS] = MoveEndBias;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_TYPE] = JustFloor;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_TOTALDIST] = TotalDist;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_MAXSPEED] = MaxSpeed;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ACCELDIST] = AccelDist;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_CURSPEED] = 0;
+		ACS_NamedExecuteAlways("ElevatorMove", 0);
+	}
+}
+
+/*
+	These are wrapper functions used by the "ElevatorMove" script to
+	eliminate the unpleasant array access.
+
+*/
+function bool GetSkipAccel(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_ACCEL]; }
+function bool GetSkipDecel(void) {return map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_DECEL]; }
+function int GetElevatorId(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_ID]; }
+function int GetStartBias(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_ACCEL_BIAS]; }
+function int GetEndBias(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_DECEL_BIAS]; }
+function bool GetElevatorType(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_TYPE]; }
+function int GetElevatorMoveDistance(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_TOTALDIST]; }
+function int GetElevatorSpeed(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_MAXSPEED]; }
+function int GetElevatorAccelDistance(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_ACCELDIST]; }
+function int GetCurrentSpeed(void) { return map_arPlayerElevatorData[PlayerNumber()][ELE_CURSPEED]; }
+function void SetCurrentSpeed(int s) { map_arPlayerElevatorData[PlayerNumber()][ELE_CURSPEED] = s; }
+function void ClearElevator(void)
+{
+		map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_ACCEL] = false;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_SKIP_DECEL] = false;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ID] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ACCEL_BIAS] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_DECEL_BIAS] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_TYPE] = false;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_TOTALDIST] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_MAXSPEED] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_ACCELDIST] = 0;
+		map_arPlayerElevatorData[PlayerNumber()][ELE_CURSPEED] = 0;
+}
+
+/*
+	This remarkably simple function returns the average
+	acceleration over a given distance.  Note that this
+	formula supplants time for distance.
+
+	You use this functions as follows:
+	fvel - final velocity, this is how fast the object should be moving at the end of the move
+	svel - the starting velocity, this is how how fast the object is moving at the start of the move
+	d - distance, this is how far the object is going to move.
+
+	You may invert this equation to decelerate as well.
+
+	Oh and this function is fairly simple, but the script that relies on it certainly isn't!
+
+*/
+function int AccelerationIs(int fvel, int svel, int d)
+{
+	return (fvel - svel) / d < 0 ?			// Is the result less than 0?
+				((fvel - svel) / d) * -1 :	// It is, so return it multiplied by -1 to make it positive.
+				(fvel - svel) / d;			// It's not, so return it normal.
+}
+
+/*
+	This script incrementally moves
+	an elevator, controlling its speed,
+	allowing it to realistically accelerate
+	and decelerate.
+
+*/
+script "ElevatorMove" (void)
+{
+	// These just make the names simpler
+	int moveDist = GetElevatorMoveDistance();
+	int maxSpeed = GetElevatorSpeed();
+	int accelDist = GetElevatorAccelDistance();
+
+	// Move biases - if non-zero these change the rate of accel/deceleration during the first and last halfs of these operations respectively
+	int startBias = GetStartBias();
+	int endBias = GetEndBias();
+
+	// Moving up or down?
+	bool moveDir = true;  		// Up
+	if (moveDist < 0)
+	{
+		moveDist *= -1;
+		moveDir = false;		// Down
+	}
+
+	// How far we have to go
+	int curDist = moveDist;
+	// Current speed
+	int curSpeed = AccelerationIs(maxSpeed, 0, ELE_MOVEINCREMENT);
+	// The current speed is externalized to the array for the object calculations
+	SetCurrentSpeed(curSpeed);
+
+	// Moving id 0 would be to move the world!
+	if (GetElevatorId() > 0)
+	{
+		while (curDist > 0)
+		{
+			// This is how far we move each iteration
+			int moveIncr = ELE_MOVEINCREMENT;
+			// Now is that going to put the elevator past it's target?
+			if (curDist - moveIncr < 0)
+				moveIncr = moveDist - (moveDist - curDist);
+
+			// Now we move the elevator.
+			// There are three options here:
+			// Accelerate
+			if (!GetSkipAccel() && curDist >= moveDist - accelDist)
+			{
+				curSpeed += AccelerationIs(maxSpeed, curSpeed, moveIncr) + (curDist >= moveDist - (accelDist / 2) ? startBias : 0);
+				if (curSpeed > maxSpeed)
+					curSpeed = maxSpeed;
+			}
+			// decelerate
+			else if (!GetSkipDecel() && curDist <= accelDist)
+			{
+				curSpeed -= AccelerationIs(0, curSpeed, moveIncr) + (curDist <= accelDist / 2 ? endBias : 0);
+				if (curSpeed <= 0)
+					curSpeed = 1;
+			}
+			// Remain constant
+			else
+				curSpeed = maxSpeed;
+
+			Log (s:"Elevator: ", d:GetElevatorId(), s:", is moving ", s:(moveDir ? "up.\n" : "down.\n"),
+				s:"Player riding is: ", d:PlayerNumber(), s:"\n",
+				s:"Total Distance is: ", d:moveDist, s:"\n",
+				s:"Max Speed is: ", d:maxSpeed, s:"\n",
+				s:"Acceleration Distance is: ", d:accelDist, s:"\n",
+				s:"Current Speed is: ", d:curSpeed, s:"\n",
+				s:"Move Increment is: ", d:moveIncr, s:"\n",
+				s:"Current Distance is: ", d:curDist, s:"\n\n");
+
+			if (moveDir)
+			{
+				if (GetElevatorType())
+					Floor_RaiseByValue(GetElevatorId(), curSpeed, moveIncr);
+				else
+					FloorAndCeiling_RaiseByValue(GetElevatorId(), curSpeed, moveIncr);
+			}
+			else
+			{
+				if (GetElevatorType())
+					Floor_LowerByValue(GetElevatorId(), curSpeed, moveIncr);
+				else
+					FloorAndCeiling_LowerByValue(GetElevatorId(), curSpeed, moveIncr);
+			}
+
+			// Finally subtract the move increment from the current distance, if this ends up 0 the loop ends.
+			curDist -= moveIncr;
+			// The current speed is externalized to the array for the object calculations
+			SetCurrentSpeed(curSpeed);
+			// Wait for the sectors to finish moving
+			TagWait(GetElevatorId());
+		}
+
+		ClearElevator();
+	}
+}
+
+function void MoveElevatorObject (int ObjectID, int SectorID) { ACS_NamedExecuteAlways("ElevatorObjectMove", 0, ObjectID, SectorID); }
+
+/*
+	This script moves the given object(s) by
+	calculating the distance between them and
+	the given sector floor, and then maintaining
+	this difference until the elevator is cleared
+	from the system.
+
+*/
+script "ElevatorObjectMove" (int oid, int sid)
+{
+	int i_curSpeed;
+	int f_ObjectFloorDiff = GetActorZ(oid) - GetSectorFloorZ(sid, 0, 0);
+	
+	// The movement loop is dependent on catching that the elevator speed is 0,
+	// so the first loop stalls the script until the elvator is actually moving.
+	do
+	{
+		i_curSpeed = GetCurrentSpeed();
+		if (i_curSpeed == 0)
+			delay (1);
+		else
+			break;
+	} while (i_curSpeed == 0);
+	
+	while (i_curSpeed > 0)
+	{
+		i_curSpeed = GetCurrentSpeed();
+		if (i_curSpeed > 0)
+		{
+			SetActorPosition(oid, GetActorX(oid), GetActorY(oid), GetSectorFloorZ(sid, 0, 0) + f_ObjectFloorDiff, false);
+			delay(1);
+		}
+		else
+			break;
+	}
+}
+
